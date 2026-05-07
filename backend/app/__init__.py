@@ -4,6 +4,7 @@ from flask_jwt_extended import JWTManager
 
 from app.core.config import settings
 from app.core.database import db
+from app.core.schema_migrations import ensure_auth_columns, ensure_product_catalog_columns
 from app.api.v1 import api_v1
 
 
@@ -22,5 +23,7 @@ def create_app(config: dict | None = None) -> Flask:
 
     with app.app_context():
         db.create_all()
+        ensure_auth_columns()
+        ensure_product_catalog_columns()
 
     return app

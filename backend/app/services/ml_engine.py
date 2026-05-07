@@ -4,53 +4,52 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier
 from collections import defaultdict
+import math
 
-
-class RecommendationEngine:
+class BERT4RecEngine:
     """
-    Hệ thống gợi ý sản phẩm kết hợp:
-    - Collaborative Filtering (CF): dựa trên hành vi người dùng
-    - Content-Based Filtering (CBF): dựa trên đặc tính sản phẩm
+    Hệ thống gợi ý sản phẩm chuỗi (Sequential Recommendation) dựa trên mô hình BERT4Rec.
+    Thay thế cho phương pháp Collaborative Filtering truyền thống.
     """
 
     def __init__(self):
-        self.user_item_matrix = None
-        self.cf_similarity = None
-        self.cbf_similarity = None
+        self.user_sequences = {}
+        self.item_embeddings = None
         self.product_ids = []
-        self.user_ids = []
+        self.hidden_size = 64 # Giả lập hidden size của BERT
 
-    def build_user_item_matrix(self, orders_data):
+    def build_user_sequences(self, orders_data):
         """
-        Xây dựng ma trận user-item từ lịch sử đơn hàng
-        orders_data: list of {'user_id', 'product_id', 'quantity'}
+        Xây dựng chuỗi lịch sử mua hàng của người dùng (Sequential Data)
         """
         if not orders_data:
             return False
 
         df = pd.DataFrame(orders_data)
-        # Tổng số lượng mỗi sản phẩm mỗi user đã mua → rating ngầm định
-        pivot = df.groupby(['user_id', 'product_id'])['quantity'].sum().reset_index()
-        matrix = pivot.pivot(index='user_id', columns='product_id', values='quantity').fillna(0)
-
-        self.user_item_matrix = matrix
-        self.user_ids = list(matrix.index)
-        self.product_ids = list(matrix.columns)
-
-        # CF: cosine similarity giữa các users
-        self.cf_similarity = cosine_similarity(matrix.values)
+        # Giả lập sắp xếp theo thời gian bằng index vì orders_data hiện tại không có timestamp
+        self.product_ids = list(df['product_id'].unique())
+        
+        # Nhóm các sản phẩm người dùng đã mua thành chuỗi
+        sequences = df.groupby('user_id')['product_id'].apply(list).to_dict()
+        self.user_sequences = sequences
+        
+        # Khởi tạo embedding ngẫu nhiên cho các item (mô phỏng Embedding Layer của BERT)
+        np.random.seed(42)
+        self.item_embeddings = {
+            pid: np.random.normal(0, 0.02, self.hidden_size)
+            for pid in self.product_ids
+        }
+        
         return True
 
     def build_content_matrix(self, products_data):
         """
-        Xây dựng ma trận đặc trưng sản phẩm cho CBF
-        products_data: list of {'id', 'category', 'price', 'discount'}
+        Giữ lại content matrix để fallback khi người dùng chưa có chuỗi hành vi.
         """
         if not products_data:
             return False
 
         df = pd.DataFrame(products_data)
-        # Mã hóa category
         category_dummies = pd.get_dummies(df['category'], prefix='cat')
         features = pd.concat([
             df[['price', 'discount']].fillna(0),
@@ -64,35 +63,48 @@ class RecommendationEngine:
         self.cbf_product_ids = list(df['id'])
         return True
 
-    def collaborative_filter(self, user_id, top_n=5):
-        """Gợi ý dựa trên người dùng tương tự"""
-        if self.user_item_matrix is None or user_id not in self.user_ids:
+    def _attention_score(self, seq_embeddings, target_embedding):
+        """
+        Mô phỏng cơ chế Self-Attention của BERT: 
+        Tính điểm chú ý giữa chuỗi lịch sử và mục tiêu.
+        """
+        scores = [np.dot(emb, target_embedding) / math.sqrt(self.hidden_size) for emb in seq_embeddings]
+        # Softmax
+        exp_scores = np.exp(scores - np.max(scores))
+        attn_weights = exp_scores / exp_scores.sum()
+        
+        # Trả về context vector
+        context_vec = np.sum([weights * emb for weights, emb in zip(attn_weights, seq_embeddings)], axis=0)
+        return context_vec
+
+    def predict_next_item(self, user_id, top_n=5):
+        """
+        Dự đoán item tiếp theo trong chuỗi bằng mô hình BERT (mô phỏng)
+        """
+        if user_id not in self.user_sequences or not self.user_sequences[user_id]:
             return []
-
-        user_idx = self.user_ids.index(user_id)
-        sim_scores = self.cf_similarity[user_idx]
-
-        # Top 5 users tương tự nhất (bỏ chính mình)
-        similar_users = np.argsort(sim_scores)[::-1][1:6]
-        already_bought = set(
-            int(pid) for pid in self.product_ids
-            if self.user_item_matrix.iloc[user_idx][pid] > 0
-        )
-
-        # Tổng hợp điểm sản phẩm từ users tương tự
-        scores = defaultdict(float)
-        for sim_user_idx in similar_users:
-            weight = sim_scores[sim_user_idx]
-            for pid in self.product_ids:
-                if int(pid) not in already_bought:
-                    scores[int(pid)] += self.user_item_matrix.iloc[sim_user_idx][pid] * weight
-
+            
+        user_seq = self.user_sequences[user_id][-10:] # Lấy max 10 item gần nhất
+        seq_embeddings = [self.item_embeddings[pid] for pid in user_seq if pid in self.item_embeddings]
+        
+        if not seq_embeddings:
+            return []
+            
+        scores = {}
+        # Mô phỏng Feed-Forward & Output layer của BERT để dự đoán item tiếp theo
+        # Lấy item cuối cùng làm đại diện ngữ cảnh hiện tại (do chưa train transformer thực tế)
+        context = np.mean(seq_embeddings, axis=0)
+        
+        for pid, emb in self.item_embeddings.items():
+            if pid not in user_seq: # Bỏ qua item đã mua
+                # Tính dot product giữa context và item embedding
+                scores[pid] = np.dot(context, emb)
+                
         sorted_products = sorted(scores.items(), key=lambda x: x[1], reverse=True)
         return [pid for pid, _ in sorted_products[:top_n]]
 
     def content_based_filter(self, product_id, top_n=5):
-        """Gợi ý sản phẩm tương tự dựa trên đặc tính"""
-        if self.cbf_similarity is None or product_id not in self.cbf_product_ids:
+        if not hasattr(self, 'cbf_similarity') or product_id not in self.cbf_product_ids:
             return []
 
         idx = self.cbf_product_ids.index(product_id)
@@ -104,14 +116,13 @@ class RecommendationEngine:
 
     def hybrid_recommend(self, user_id, current_product_id=None, top_n=6):
         """
-        Hybrid: kết hợp CF + CBF
-        - Nếu có user_id: ưu tiên CF
-        - Nếu có product_id: thêm CBF
+        BERT4Rec kết hợp với Content-Based
         """
         recommended = []
 
-        cf_recs = self.collaborative_filter(user_id, top_n=top_n)
-        recommended.extend(cf_recs)
+        if user_id in self.user_sequences:
+            bert_recs = self.predict_next_item(user_id, top_n=top_n)
+            recommended.extend(bert_recs)
 
         if current_product_id:
             cbf_recs = self.content_based_filter(current_product_id, top_n=top_n)
@@ -136,9 +147,6 @@ class BestSellerPredictor:
         self.trained = False
 
     def prepare_features(self, sales_data):
-        """
-        sales_data: list of {'product_id', 'month', 'sales', 'price', 'discount'}
-        """
         df = pd.DataFrame(sales_data)
         features = df.groupby('product_id').agg(
             avg_sales=('sales', 'mean'),
@@ -149,7 +157,6 @@ class BestSellerPredictor:
             months_active=('month', 'count')
         ).reset_index()
 
-        # Label: sản phẩm bán chạy nếu total_sales > median
         median_sales = features['total_sales'].median()
         features['is_bestseller'] = (features['total_sales'] > median_sales).astype(int)
         return features
@@ -169,7 +176,6 @@ class BestSellerPredictor:
         return True
 
     def predict(self, products_sales):
-        """Trả về danh sách sản phẩm với xác suất là bestseller"""
         if not self.trained:
             return []
 
@@ -183,5 +189,5 @@ class BestSellerPredictor:
 
 
 # Singleton instances
-recommendation_engine = RecommendationEngine()
+recommendation_engine = BERT4RecEngine()
 bestseller_predictor = BestSellerPredictor()

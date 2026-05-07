@@ -48,3 +48,34 @@ class OrderItem(db.Model):
             'price': self.price,
             'subtotal': self.price * self.quantity
         }
+
+
+class OrderReturn(db.Model):
+    __tablename__ = "order_returns"
+
+    id = db.Column(db.Integer, primary_key=True)
+    order_id = db.Column(db.Integer, db.ForeignKey("orders.id"), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    reason = db.Column(db.Text, nullable=False)
+    status = db.Column(db.String(30), default="requested", nullable=False)  # requested/approved/rejected/completed
+    admin_note = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    order = db.relationship("Order", lazy=True)
+    user = db.relationship("User", lazy=True)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "order_id": self.order_id,
+            "user_id": self.user_id,
+            "reason": self.reason,
+            "status": self.status,
+            "admin_note": self.admin_note,
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "order_total": self.order.total if self.order else None,
+            "customer_name": self.user.name if self.user else None,
+            "customer_email": self.user.email if self.user else None,
+        }

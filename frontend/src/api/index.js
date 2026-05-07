@@ -5,9 +5,12 @@ const api = axios.create({
   withCredentials: true,
 });
 
+const getStoredToken = () =>
+  localStorage.getItem("token") || sessionStorage.getItem("token");
+
 // Attach JWT token to every request
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("token");
+  const token = getStoredToken();
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
@@ -16,8 +19,18 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (res) => res,
   (err) => {
-    if (err.response?.status === 401) {
+    const token = getStoredToken();
+    const requestUrl = err.config?.url || "";
+    const isAuthCall =
+      requestUrl.includes("/auth/login") ||
+      requestUrl.includes("/auth/register") ||
+      requestUrl.includes("/auth/forgot-password") ||
+      requestUrl.includes("/auth/reset-password") ||
+      requestUrl.includes("/auth/verify-otp");
+
+    if (err.response?.status === 401 && token && !isAuthCall) {
       localStorage.removeItem("token");
+      sessionStorage.removeItem("token");
       window.location.href = "/login";
     }
     return Promise.reject(err);

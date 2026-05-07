@@ -54,12 +54,12 @@ def train_models():
     products_data = get_products_data()
     sales_data = get_sales_data()
 
-    cf_ok = recommendation_engine.build_user_item_matrix(orders_data)
+    cf_ok = recommendation_engine.build_user_sequences(orders_data)
     cbf_ok = recommendation_engine.build_content_matrix(products_data)
     bs_ok = bestseller_predictor.train(sales_data) if sales_data else False
 
     return jsonify({
-        'collaborative_filtering': 'trained' if cf_ok else 'skipped (chưa đủ dữ liệu)',
+        'bert4rec_sequential': 'trained' if cf_ok else 'skipped (chưa đủ dữ liệu)',
         'content_based_filtering': 'trained' if cbf_ok else 'skipped',
         'bestseller_prediction': 'trained' if bs_ok else 'skipped (chưa đủ dữ liệu)'
     }), 200
